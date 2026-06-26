@@ -1,0 +1,61 @@
+{
+  "name": "SavedProject",
+  "type": "object",
+  "properties": {
+    "idea_id": {
+      "type": "string",
+      "description": "Reference to the ProjectIdea id (or 'ai-generated')"
+    },
+    "title": {
+      "type": "string",
+      "description": "Project title"
+    },
+    "description": {
+      "type": "string",
+      "description": "Project description"
+    },
+    "difficulty": {
+      "type": "string",
+      "enum": [
+        "Beginner",
+        "Intermediate",
+        "Advanced"
+      ]
+    },
+    "category": {
+      "type": "string"
+    },
+    "tech_stack": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "code": {
+      "type": "string",
+      "description": "User's code for this project"
+    },
+    "language": {
+      "type": "string",
+      "default": "javascript",
+      "description": "Code editor language"
+    },
+    "notes": {
+      "type": "string",
+      "description": "User notes about the project"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "saved",
+        "in_progress",
+        "completed"
+      ],
+      "default": "saved"
+    }
+  },
+  "required": [
+    "title",
+    "description"
+  ]
+}

@@ -1,0 +1,35 @@
+{
+  "name": "ProjectVersion",
+  "type": "object",
+  "properties": {
+    "project_id": {
+      "type": "string",
+      "description": "Reference to SavedProject id"
+    },
+    "label": {
+      "type": "string",
+      "description": "Version label, e.g. v0.1, v0.2 or custom name"
+    },
+    "code": {
+      "type": "string",
+      "description": "Snapshot of code at this version"
+    },
+    "language": {
+      "type": "string",
+      "description": "Language at time of snapshot"
+    },
+    "notes": {
+      "type": "string",
+      "description": "Notes at time of snapshot"
+    },
+    "features": {
+      "type": "string",
+      "description": "Features included in this version, one per line"
+    }
+  },
+  "required": [
+    "project_id",
+    "label",
+    "code"
+  ]
+}

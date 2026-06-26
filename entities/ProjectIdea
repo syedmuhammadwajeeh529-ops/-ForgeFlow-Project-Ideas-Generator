@@ -1,0 +1,63 @@
+{
+  "name": "ProjectIdea",
+  "type": "object",
+  "properties": {
+    "title": {
+      "type": "string",
+      "description": "Project idea title"
+    },
+    "description": {
+      "type": "string",
+      "description": "Detailed description of the project"
+    },
+    "difficulty": {
+      "type": "string",
+      "enum": [
+        "Beginner",
+        "Intermediate",
+        "Advanced"
+      ],
+      "description": "Difficulty level"
+    },
+    "category": {
+      "type": "string",
+      "enum": [
+        "Web",
+        "Mobile",
+        "AI/ML",
+        "CLI",
+        "Game",
+        "API",
+        "Data",
+        "DevOps",
+        "Other"
+      ],
+      "description": "Project category"
+    },
+    "tech_stack": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Suggested technologies"
+    },
+    "is_curated": {
+      "type": "boolean",
+      "default": false,
+      "description": "Whether this is a curated idea"
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Tags for the idea"
+    }
+  },
+  "required": [
+    "title",
+    "description",
+    "difficulty",
+    "category"
+  ]
+}
