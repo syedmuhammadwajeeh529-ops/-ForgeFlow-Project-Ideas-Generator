@@ -1,11 +1,8 @@
-import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { base44 } from '@/api/base44Client';
 import { useNavigate } from 'react-router-dom';
-import { motion } from 'framer-motion';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Code2, Trash2, BookMarked, Loader2, CheckCircle2, Clock, Bookmark, GitBranch, Pencil } from 'lucide-react';
+import { Trash2, BookMarked, Loader2, CheckCircle2, Clock, Bookmark } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
 import ProjectCardVersions from '@/components/projects/ProjectCardVersions';
 
@@ -21,18 +18,36 @@ export default function SavedProjects() {
   const queryClient = useQueryClient();
   // openVersionsId state removed - versions now shown inline via ProjectCardVersions
 
-  const { data: projects = [], isLoading } = useQuery({
-    queryKey: ['saved-projects'],
-    queryFn: () => base44.entities.SavedProject.list('-updated_date', 50),
-  });
+const { data: projects = [], isLoading } = useQuery({
+  queryKey: ['saved-projects'],
+  queryFn: async () => {
+    const res = await fetch("http://localhost:5000/api/saved-projects");
 
+    const data = await res.json();
+
+    console.log("Projects from API:", data);
+
+    return data;
+  },
+});
   const deleteMutation = useMutation({
-    mutationFn: (id) => base44.entities.SavedProject.delete(id),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['saved-projects'] });
-      toast({ title: 'Project removed' });
-    },
-  });
+  mutationFn: async (id) => {
+    const res = await fetch(`http://localhost:5000/api/saved-projects/${id}`, {
+      method: "DELETE",
+    });
+
+    if (!res.ok) {
+      throw new Error("Failed to delete");
+    }
+
+    return res.json();
+  },
+
+  onSuccess: () => {
+    queryClient.invalidateQueries({ queryKey: ["saved-projects"] });
+    toast({ title: "Project removed" });
+  },
+});
 
   if (isLoading) {
     return (
@@ -69,11 +84,8 @@ export default function SavedProjects() {
             const status = statusConfig[project.status] || statusConfig.saved;
             const StatusIcon = status.icon;
             return (
-              <motion.div
+              <div
                 key={project.id}
-                initial={{ opacity: 0, y: 16 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: i * 0.05 }}
                 className="bg-card border border-border rounded-xl p-5 hover:shadow-lg hover:shadow-primary/5 hover:border-primary/30 transition-all duration-300 flex flex-col gap-3"
               >
                 <div className="flex items-start justify-between gap-2">
@@ -108,37 +120,30 @@ export default function SavedProjects() {
                   )}
                 </div>
 
-                {project.tech_stack?.length > 0 && (
-                  <div className="flex flex-wrap gap-1">
-                    {project.tech_stack.slice(0, 3).map(t => (
-                      <span key={t} className="text-[11px] font-mono bg-muted/60 text-muted-foreground px-2 py-0.5 rounded">
-                        {t}
-                      </span>
-                    ))}
-                  </div>
-                )}
+               {(() => {
+  const techStack =
+    typeof project.tech_stack === "string"
+      ? JSON.parse(project.tech_stack)
+      : (project.tech_stack || []);
+
+  return techStack.length > 0 ? (
+    <div className="flex flex-wrap gap-1">
+      {techStack.slice(0, 3).map((t) => (
+        <span
+          key={t}
+          className="text-[11px] font-mono bg-muted/60 text-muted-foreground px-2 py-0.5 rounded"
+        >
+          {t}
+        </span>
+      ))}
+    </div>
+  ) : null;
+})()}
 
                 {/* Middle: latest version features */}
                 <ProjectCardVersions projectId={project.id} />
 
                 <div className="flex items-center gap-2 mt-auto pt-2">
-                  <Button
-                    size="sm"
-                    className="flex-1 gap-2 bg-primary hover:bg-primary/90 h-8 text-xs"
-                    onClick={() => navigate(`/editor/${project.id}`)}
-                  >
-                    <Code2 className="w-3.5 h-3.5" />
-                    Open Editor
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="h-8 px-2 text-xs gap-1 text-muted-foreground hover:text-primary"
-                    onClick={() => navigate(`/versions/${project.id}`)}
-                  >
-                    <Pencil className="w-3.5 h-3.5" />
-                    Versions
-                  </Button>
                   <Button
                     size="sm"
                     variant="ghost"
@@ -149,7 +154,7 @@ export default function SavedProjects() {
                     <Trash2 className="w-3.5 h-3.5" />
                   </Button>
                 </div>
-              </motion.div>
+              </div>
             );
           })}
         </div>

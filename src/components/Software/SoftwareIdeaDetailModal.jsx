@@ -1,8 +1,7 @@
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { BookmarkPlus, Code2 } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { BookmarkPlus } from 'lucide-react';
 
 const difficultyColors = {
   Beginner: 'bg-green-100 text-green-700 border-green-200',
@@ -11,14 +10,7 @@ const difficultyColors = {
 };
 
 export default function SoftwareIdeaDetailModal({ idea, open, onClose, onSave, isSaving }) {
-  const navigate = useNavigate();
   if (!idea) return null;
-
-  const handleSaveAndCode = async () => {
-    const saved = await onSave(idea);
-    if (saved?.id) navigate(`/editor/${saved.id}`);
-    onClose();
-  };
 
   return (
     <Dialog open={open} onOpenChange={onClose}>
@@ -26,6 +18,7 @@ export default function SoftwareIdeaDetailModal({ idea, open, onClose, onSave, i
         <DialogHeader>
           <DialogTitle className="text-xl font-bold pr-8">{idea.title}</DialogTitle>
         </DialogHeader>
+
         <div className="space-y-4">
           <div className="flex flex-wrap gap-2">
             <Badge variant="outline" className={`border ${difficultyColors[idea.difficulty]}`}>
@@ -35,33 +28,56 @@ export default function SoftwareIdeaDetailModal({ idea, open, onClose, onSave, i
               {idea.category}
             </Badge>
           </div>
-          <p className="text-muted-foreground leading-relaxed text-sm">{idea.description}</p>
+
+          <p className="text-muted-foreground leading-relaxed text-sm">
+            {idea.description}
+          </p>
+
           {idea.tech_stack?.length > 0 && (
             <div>
-              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Tech Stack</p>
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">
+                Tech Stack
+              </p>
               <div className="flex flex-wrap gap-1.5">
-                {idea.tech_stack.map(tech => (
-                  <span key={tech} className="text-xs font-mono bg-muted text-muted-foreground px-2.5 py-1 rounded-md">{tech}</span>
+                {idea.tech_stack.map((tech) => (
+                  <span
+                    key={tech}
+                    className="text-xs font-mono bg-muted text-muted-foreground px-2.5 py-1 rounded-md"
+                  >
+                    {tech}
+                  </span>
                 ))}
               </div>
             </div>
           )}
+
           {idea.tags?.length > 0 && (
             <div>
-              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Tags</p>
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">
+                Tags
+              </p>
               <div className="flex flex-wrap gap-1.5">
-                {idea.tags.map(tag => (
-                  <Badge key={tag} variant="secondary" className="text-xs">{tag}</Badge>
+                {idea.tags.map((tag) => (
+                  <Badge key={tag} variant="secondary" className="text-xs">
+                    {tag}
+                  </Badge>
                 ))}
               </div>
             </div>
           )}
+
           <div className="flex gap-3 pt-2">
-            <Button onClick={handleSaveAndCode} disabled={isSaving} className="flex-1 gap-2 bg-primary hover:bg-primary/90">
-              <Code2 className="w-4 h-4" /> Save & Start Coding
-            </Button>
-            <Button variant="outline" onClick={() => { onSave(idea); onClose(); }} disabled={isSaving} className="gap-2">
-              <BookmarkPlus className="w-4 h-4" /> Save
+            <Button
+              variant="outline"
+              onClick={() => {
+                onSave(idea);
+                onClose();
+              }}
+              disabled={isSaving}
+              className="gap-2"
+            >
+              <BookmarkPlus className="w-4 h-4" />
+              Save
             </Button>
           </div>
         </div>

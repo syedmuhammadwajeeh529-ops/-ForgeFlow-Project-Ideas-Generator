@@ -1,60 +1,68 @@
 import { useQuery } from '@tanstack/react-query';
-import { base44 } from '@/api/base44Client';
+import { useNavigate } from 'react-router-dom';
+import api from '@/lib/api';
 import { Badge } from '@/components/ui/badge';
-import { GitBranch, CheckCircle2 } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { CheckCircle2, GitBranch, History, Sparkles } from 'lucide-react';
+import { parseFeatureRecords } from '@/lib/version-plan';
+
+const statusStyles = {
+  active: 'text-primary',
+  completed: 'text-green-600',
+  locked: 'text-muted-foreground',
+};
 
 export default function ProjectCardVersions({ projectId }) {
-  const { data: versions = [] } = useQuery({
-    queryKey: ['versions', projectId],
-    queryFn: () => base44.entities.ProjectVersion.filter({ project_id: projectId }, '-created_date', 10),
+  const navigate = useNavigate();
+  const { data: versions = [], isLoading } = useQuery({
+    queryKey: ['versions', String(projectId)],
+    queryFn: async () => (await api.get(`/project-versions/${projectId}`)).data,
   });
 
-  if (versions.length === 0) {
-    return <p className="text-xs text-muted-foreground/50 italic py-1">No versions yet.</p>;
-  }
+  if (isLoading) return <p className="py-1 text-xs text-muted-foreground/60">Preparing Version 0.1…</p>;
+  if (versions.length === 0) return <p className="py-1 text-xs italic text-muted-foreground/60">No version plan yet.</p>;
 
-  const latest = versions[0];
-  const features = latest.features ? latest.features.split('\n').filter(Boolean) : [];
-  const doneCount = features.filter(f => f.startsWith('✓ ')).length;
-  const totalCount = features.length;
-  const pct = totalCount > 0 ? Math.round((doneCount / totalCount) * 100) : 0;
-  const allDone = totalCount > 0 && doneCount === totalCount;
+  const currentVersion = versions.find((version) => version.status === 'active')
+    || versions.filter((version) => version.status === 'completed').at(-1)
+    || versions[0];
+  const features = parseFeatureRecords(currentVersion.features, currentVersion.feature_meta);
+  const completedCount = features.filter((feature) => feature.completed).length;
 
   return (
-    <div className="flex flex-col gap-2 bg-muted/30 rounded-lg px-3 py-2.5 border border-border/50">
-      {/* Top row: version badge + count */}
-      <div className="flex items-center justify-between">
-        <Badge className="text-[10px] font-mono bg-primary/10 text-primary border-primary/20 px-2 py-0.5 gap-1">
-          <GitBranch className="w-2.5 h-2.5" />
-          {latest.label}
-        </Badge>
-        <div className="flex items-center gap-1">
-          {allDone ? (
-            <CheckCircle2 className="w-3.5 h-3.5 text-green-500" />
-          ) : null}
-          <span className={`text-xs font-semibold ${allDone ? 'text-green-600' : 'text-foreground'}`}>
-            {doneCount}/{totalCount}
-          </span>
-          <span className="text-[10px] text-muted-foreground">features</span>
-        </div>
+    <section className="rounded-lg border border-border/60 bg-muted/20 p-3">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <p className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+          <GitBranch className="h-3.5 w-3.5 text-primary" /> Current version
+        </p>
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-7 gap-1.5 px-2 text-[10px] text-muted-foreground hover:text-primary"
+          onClick={() => navigate(`/versions/${projectId}?mode=view`)}
+        >
+          <History className="h-3 w-3" /> Version History
+        </Button>
       </div>
 
-      {/* Progress bar */}
-      {totalCount > 0 ? (
-        <div className="space-y-1">
-          <div className="w-full h-2 bg-muted rounded-full overflow-hidden">
-            <div
-              className={`h-full rounded-full transition-all duration-500 ${allDone ? 'bg-green-500' : 'bg-primary'}`}
-              style={{ width: `${pct}%` }}
-            />
-          </div>
-          <p className={`text-[10px] font-medium ${allDone ? 'text-green-600' : 'text-muted-foreground'}`}>
-            {allDone ? '✓ All features complete' : `${pct}% complete`}
-          </p>
+      <div className="rounded-md border border-border/50 bg-card/70 px-2.5 py-2">
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <Badge className="border-primary/20 bg-primary/10 px-1.5 py-0 font-mono text-[10px] text-primary">
+            {currentVersion.label}
+          </Badge>
+          <span className={`text-[10px] font-medium capitalize ${statusStyles[currentVersion.status] || statusStyles.locked}`}>
+            {currentVersion.status} · {completedCount}/{features.length} built
+          </span>
         </div>
-      ) : (
-        <p className="text-[10px] text-muted-foreground/60 italic">No features listed yet.</p>
-      )}
-    </div>
+        <ul className="space-y-1.5">
+          {features.map((feature) => (
+            <li key={feature.id} className={`flex items-start gap-1.5 text-[11px] leading-snug ${feature.completed ? 'text-muted-foreground line-through' : 'text-foreground/80'}`}>
+              <CheckCircle2 className={`mt-0.5 h-3 w-3 shrink-0 ${feature.completed ? 'text-primary' : 'text-muted-foreground/40'}`} />
+              <span className="flex-1">{feature.text}</span>
+              {feature.source === 'ai' && <Sparkles className="mt-0.5 h-3 w-3 shrink-0 text-primary" aria-label="AI suggested" />}
+            </li>
+          ))}
+        </ul>
+      </div>
+    </section>
   );
 }

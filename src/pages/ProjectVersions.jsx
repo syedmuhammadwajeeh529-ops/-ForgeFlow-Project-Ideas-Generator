@@ -1,567 +1,435 @@
-import { useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
-import { base44 } from '@/api/base44Client';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useEffect, useMemo, useState } from 'react';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import api from '@/lib/api';
+import { parseFeatureHistory, parseFeatureRecords } from '@/lib/version-plan';
 import { useToast } from '@/components/ui/use-toast';
-import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
-import { ArrowLeft, Plus, Trash2, Save, Pencil, X, Check, GitBranch, Camera, ChevronRight, ChevronLeft, Sparkles, Loader2 } from 'lucide-react';
-import { motion, AnimatePresence } from 'framer-motion';
+import {
+  ArrowLeft, Check, CheckCircle2, Clock3, Eye, FileImage, GitBranch, History,
+  LockKeyhole, Pencil, Plus, Save, Trash2, Upload,
+} from 'lucide-react';
 
-const DEFAULT_FEATURES_BY_CATEGORY = {
-  Web: ['User authentication', 'Responsive UI', 'REST API integration', 'Database persistence', 'Deployment setup'],
-  Mobile: ['Cross-platform support', 'Push notifications', 'Offline mode', 'Social login', 'App store deployment'],
-  'AI/ML': ['LLM API integration', 'Prompt engineering', 'Structured output parsing', 'Loading & streaming states', 'Result history'],
-  CLI: ['Argument parsing', 'Config file support', 'Colorized output', 'Error handling', 'npm publishing'],
-  Game: ['Game loop & state', 'Controls handling', 'Score tracking', 'Multiple levels', 'Sound & animations'],
-  API: ['RESTful endpoints', 'Request validation', 'Auth & rate limiting', 'Auto-generated docs', 'CI/CD deployment'],
-  Data: ['File upload & parsing', 'Interactive charts', 'Filtering & search', 'Export to CSV', 'Summary statistics'],
-  DevOps: ['Automated monitoring', 'CLI tooling', 'Docker support', 'CI/CD integration', 'Logging & observability'],
-  Other: ['Core feature', 'User-friendly UI', 'Data persistence', 'Error handling', 'Documentation'],
+const statusClasses = {
+  active: 'border-primary/30 bg-primary/10 text-primary',
+  completed: 'border-green-200 bg-green-50 text-green-700',
+  locked: 'border-border bg-muted text-muted-foreground',
 };
 
-function getDefaultFeatures(category) {
-  return DEFAULT_FEATURES_BY_CATEGORY[category] || DEFAULT_FEATURES_BY_CATEGORY.Other;
+function featureSourceLabel(feature) {
+  if (feature.source === 'ai' && feature.edited) return 'AI edited';
+  if (feature.source === 'ai') return feature.accepted ? 'AI kept' : 'AI suggestion';
+  if (feature.source === 'starter') return feature.accepted ? 'Starter kept' : 'Starter suggestion';
+  if (feature.source === 'planned') return feature.accepted ? 'Planned feature' : 'Planned suggestion';
+  if (feature.source === 'user') return 'User added';
+  return feature.edited ? 'Edited' : 'Existing feature';
+}
+
+function nextVersionLabel(versions) {
+  const highestMinor = versions.reduce((highest, version) => {
+    const match = String(version.label || '').match(/v0\.(\d+)/i);
+    return match ? Math.max(highest, Number(match[1])) : highest;
+  }, 0);
+  return `v0.${highestMinor + 1}`;
+}
+
+function buildDraft(version) {
+  return {
+    versionId: version.id,
+    label: version.label,
+    notes: version.notes || '',
+    features: parseFeatureRecords(version.features, version.feature_meta),
+  };
 }
 
 export default function ProjectVersions() {
-  const { id } = useParams();
+  const { id: projectId } = useParams();
+  const [searchParams] = useSearchParams();
   const navigate = useNavigate();
-  const { toast } = useToast();
   const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const isReadOnly = searchParams.get('mode') === 'view';
 
-  const [selectedIdx, setSelectedIdx] = useState(0);
-  const [editingFeatures, setEditingFeatures] = useState(false);
-  const [localFeatures, setLocalFeatures] = useState([]);
-  const [localNotes, setLocalNotes] = useState('');
-  const [localLabel, setLocalLabel] = useState('');
-  const [newFeatureText, setNewFeatureText] = useState('');
-  const [showNewForm, setShowNewForm] = useState(false);
+  const [selectedId, setSelectedId] = useState(null);
+  const [draft, setDraft] = useState(null);
+  const [newFeature, setNewFeature] = useState('');
+  const [completionOpen, setCompletionOpen] = useState(false);
+  const [completionConfirmed, setCompletionConfirmed] = useState(false);
+  const [completionDuration, setCompletionDuration] = useState('');
+  const [verificationImage, setVerificationImage] = useState('');
+  const [verificationFileName, setVerificationFileName] = useState('');
+  const [showAddVersion, setShowAddVersion] = useState(false);
   const [newVersionLabel, setNewVersionLabel] = useState('');
-  const [aiSuggestions, setAiSuggestions] = useState(null); // { label, notes, features: [{text, kept}] }
-  const [aiLoading, setAiLoading] = useState(false);
+  const [newVersionNotes, setNewVersionNotes] = useState('');
+  const [newVersionFeatures, setNewVersionFeatures] = useState('');
 
   const { data: project } = useQuery({
-    queryKey: ['project', id],
-    queryFn: () => base44.entities.SavedProject.filter({ id }),
-    select: (data) => data[0],
+    queryKey: ['project', String(projectId)],
+    queryFn: async () => {
+      const response = await api.get('/saved-projects');
+      return response.data.find((item) => String(item.id) === String(projectId)) || null;
+    },
   });
 
-  const { data: rawVersions = [], isLoading } = useQuery({
-    queryKey: ['versions', id],
-    queryFn: () => base44.entities.ProjectVersion.filter({ project_id: id }, 'created_date', 50),
+  const { data: versions = [], isLoading, isError } = useQuery({
+    queryKey: ['versions', String(projectId)],
+    queryFn: async () => (await api.get(`/project-versions/${projectId}`)).data,
   });
 
-  // oldest → newest (ascending timeline)
-  const versions = rawVersions;
+  const selectedVersion = useMemo(
+    () => versions.find((version) => String(version.id) === String(selectedId)) || null,
+    [selectedId, versions]
+  );
+  const activeVersion = versions.find((version) => version.status === 'active') || null;
+  const canEditSelected = !isReadOnly && selectedVersion?.status === 'active';
+  const allCompleted = versions.length > 0 && versions.every((version) => version.status === 'completed');
+
+  useEffect(() => {
+    if (versions.length === 0) return;
+    if (selectedId && versions.some((version) => String(version.id) === String(selectedId))) return;
+    setSelectedId(activeVersion?.id || versions.filter((version) => version.status === 'completed').at(-1)?.id || versions[0].id);
+  }, [activeVersion?.id, selectedId, versions]);
+
+  useEffect(() => {
+    setDraft(null);
+    setNewFeature('');
+  }, [selectedId]);
+
+  const invalidateVersions = () => queryClient.invalidateQueries({ queryKey: ['versions', String(projectId)] });
+
+  const saveMutation = useMutation({
+    mutationFn: async (payload) => (await api.put(`/project-versions/${selectedVersion.id}`, payload)).data,
+    onSuccess: () => {
+      setDraft(null);
+      invalidateVersions();
+      toast({ title: 'Version saved', description: 'The project card now uses these updated features.' });
+    },
+    onError: (error) => toast({ title: 'Could not save version', description: error.response?.data?.error || error.message, variant: 'destructive' }),
+  });
+
+  const completeMutation = useMutation({
+    mutationFn: async () => (await api.post(`/project-versions/${selectedVersion.id}/complete`, {
+      confirmation: true,
+      completion_duration: completionDuration,
+      verification_image: verificationImage,
+    })).data,
+    onSuccess: (result) => {
+      setCompletionOpen(false);
+      setCompletionConfirmed(false);
+      setCompletionDuration('');
+      setVerificationImage('');
+      setVerificationFileName('');
+      setSelectedId(result.activeVersionId || result.completedVersionId);
+      invalidateVersions();
+      toast({ title: result.activeVersionId ? 'Next version unlocked' : 'Version completed', description: result.activeVersionId ? 'The next version is now active.' : 'All planned versions are complete.' });
+    },
+    onError: (error) => toast({ title: 'Could not complete version', description: error.response?.data?.error || error.message, variant: 'destructive' }),
+  });
 
   const createMutation = useMutation({
-    mutationFn: (data) => base44.entities.ProjectVersion.create(data),
+    mutationFn: async () => {
+      const featureRecords = newVersionFeatures.split('\n').map((text) => text.trim()).filter(Boolean).map((text) => ({
+        id: `feature-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        text,
+        source: 'user',
+        accepted: true,
+        completed: false,
+      }));
+      return (await api.post('/project-versions', {
+        project_id: projectId,
+        label: newVersionLabel.trim() || nextVersionLabel(versions),
+        notes: newVersionNotes.trim(),
+        feature_records: featureRecords,
+      })).data;
+    },
     onSuccess: (created) => {
-      queryClient.invalidateQueries({ queryKey: ['versions', id] });
-      setShowNewForm(false);
-      setNewVersionLabel('');
-      setSelectedIdx(versions.length); // jump to new
-      toast({ title: 'Version created!' });
+      setShowAddVersion(false);
+      setNewVersionNotes('');
+      setNewVersionFeatures('');
+      setSelectedId(created.id);
+      invalidateVersions();
+      toast({ title: 'New active version created' });
     },
+    onError: (error) => toast({ title: 'Could not create version', description: error.response?.data?.error || error.message, variant: 'destructive' }),
   });
 
-  const updateMutation = useMutation({
-    mutationFn: ({ vid, data }) => base44.entities.ProjectVersion.update(vid, data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['versions', id] });
-      setEditingFeatures(false);
-      toast({ title: 'Version saved!' });
-    },
+  const startEditing = () => {
+    if (selectedVersion?.status === 'active') setDraft(buildDraft(selectedVersion));
+  };
+
+  const updateDraft = (update) => setDraft((current) => current ? { ...current, ...update } : current);
+
+  const updateFeature = (featureId, update) => updateDraft({
+    features: draft.features.map((feature) => feature.id === featureId ? { ...feature, ...update } : feature),
   });
 
-  const deleteMutation = useMutation({
-    mutationFn: (vid) => base44.entities.ProjectVersion.delete(vid),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['versions', id] });
-      setSelectedIdx(idx => Math.max(0, idx - 1));
-      toast({ title: 'Version deleted' });
-    },
+  const deleteFeature = (featureId) => updateDraft({
+    features: draft.features.filter((feature) => feature.id !== featureId),
   });
-
-  const selectedVersion = versions[selectedIdx] || null;
-
-  const startEdit = () => {
-    if (!selectedVersion) return;
-    setLocalFeatures(selectedVersion.features ? selectedVersion.features.split('\n').filter(Boolean) : []);
-    setLocalNotes(selectedVersion.notes || '');
-    setLocalLabel(selectedVersion.label || '');
-    setEditingFeatures(true);
-  };
-
-  const cancelEdit = () => {
-    setEditingFeatures(false);
-    setNewFeatureText('');
-  };
-
-  const saveEdit = () => {
-    if (!selectedVersion) return;
-    updateMutation.mutate({
-      vid: selectedVersion.id,
-      data: { label: localLabel, features: localFeatures.join('\n'), notes: localNotes },
-    });
-  };
-
-  const toggleFeature = (feat) => {
-    // Features prefixed with "✓ " are "done", others are pending
-    setLocalFeatures(prev =>
-      prev.map(f => f === feat ? (f.startsWith('✓ ') ? f.slice(2) : '✓ ' + f) : f)
-    );
-  };
-
-  const removeFeature = (feat) => {
-    setLocalFeatures(prev => prev.filter(f => f !== feat));
-  };
 
   const addFeature = () => {
-    const trimmed = newFeatureText.trim();
-    if (!trimmed) return;
-    setLocalFeatures(prev => [...prev, trimmed]);
-    setNewFeatureText('');
+    const text = newFeature.trim();
+    if (!text || !draft) return;
+    updateDraft({
+      features: [...draft.features, {
+        id: `feature-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        text,
+        source: 'user',
+        accepted: true,
+        completed: false,
+        edited: false,
+        originalText: null,
+      }],
+    });
+    setNewFeature('');
   };
 
-  const handleCreate = () => {
-    const count = versions.length + 1;
-    const label = newVersionLabel.trim() || `v0.${count}`;
-    const defaultFeatures = getDefaultFeatures(project?.category);
-    createMutation.mutate({
-      project_id: id,
-      label,
-      code: project?.code || '',
-      language: project?.language || 'javascript',
-      notes: '',
-      features: defaultFeatures.join('\n'),
-    });
+  const saveDraft = () => {
+    if (!draft) return;
+    saveMutation.mutate({ label: draft.label, notes: draft.notes, feature_records: draft.features });
   };
 
-  const handleSnapshot = () => {
-    const count = versions.length + 1;
-    const label = `v0.${count} snapshot`;
-    const prevFeatures = selectedVersion?.features || getDefaultFeatures(project?.category).join('\n');
-    createMutation.mutate({
-      project_id: id,
-      label,
-      code: project?.code || '',
-      language: project?.language || 'javascript',
-      notes: `Snapshot taken from ${selectedVersion?.label || 'current state'}`,
-      features: prevFeatures,
-    });
+  const openCompletion = () => {
+    if (draft) {
+      toast({ title: 'Save your changes first', description: 'Save feature changes before completing this version.', variant: 'destructive' });
+      return;
+    }
+    setCompletionConfirmed(false);
+    setCompletionDuration('');
+    setVerificationImage('');
+    setVerificationFileName('');
+    setCompletionOpen(true);
   };
 
-  const handleAiSuggest = async () => {
-    if (!project) return;
-    setAiLoading(true);
-    setAiSuggestions(null);
-    const currentFeatures = selectedVersion?.features ? selectedVersion.features.split('\n').filter(Boolean).map(f => f.startsWith('✓ ') ? f.slice(2) : f) : [];
-    const result = await base44.integrations.Core.InvokeLLM({
-      prompt: `You are helping a developer plan the next version of their project.
-
-Project: "${project.title}"
-Description: "${project.description || ''}"
-Category: "${project.category || ''}"
-Tech stack: ${(project.tech_stack || []).join(', ') || 'unknown'}
-Current features in this version: ${currentFeatures.length > 0 ? currentFeatures.join(', ') : 'none yet'}
-
-Suggest a next version with:
-1. A version label (e.g. v0.${versions.length + 1} or a meaningful name)
-2. 5-7 concrete, actionable new features that logically build on or improve the existing ones
-3. A short summary of what changed and why
-
-Be specific and practical — each feature should be something a developer can actually implement.`,
-      response_json_schema: {
-        type: 'object',
-        properties: {
-          label: { type: 'string' },
-          notes: { type: 'string' },
-          features: { type: 'array', items: { type: 'string' } },
-        },
-      },
-    });
-    setAiSuggestions({
-      label: result.label || `v0.${versions.length + 1} (AI)`,
-      notes: result.notes || '',
-      features: (result.features || []).map(text => ({ text, kept: true })),
-    });
-    setAiLoading(false);
+  const selectProofImage = (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith('image/') || file.size > 5 * 1024 * 1024) {
+      toast({ title: 'Upload a valid image', description: 'Choose a PNG, JPG, WEBP, or similar image smaller than 5 MB.', variant: 'destructive' });
+      event.target.value = '';
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      setVerificationImage(String(reader.result || ''));
+      setVerificationFileName(file.name);
+    };
+    reader.readAsDataURL(file);
   };
 
-  const acceptAiSuggestions = () => {
-    const keptFeatures = aiSuggestions.features.filter(f => f.kept).map(f => f.text);
-    createMutation.mutate({
-      project_id: id,
-      label: aiSuggestions.label,
-      code: project?.code || '',
-      language: project?.language || 'javascript',
-      notes: aiSuggestions.notes,
-      features: keptFeatures.join('\n'),
-    });
-    setAiSuggestions(null);
-  };
+  console.log("CURRENT PROJECTVERSIONS FILE LOADED");
+  let displayFeatures = [];
 
-  const displayFeatures = editingFeatures
-    ? localFeatures
-    : (selectedVersion?.features ? selectedVersion.features.split('\n').filter(Boolean) : []);
+if (draft && draft.versionId === selectedVersion?.id) {
+  displayFeatures = draft.features || [];
+} else if (selectedVersion) {
+  displayFeatures = parseFeatureRecords(
+    selectedVersion.features,
+    selectedVersion.feature_meta
+  );
+}
+  const featureHistory = selectedVersion ? parseFeatureHistory(selectedVersion.feature_history) : [];
+
+  if (isLoading) return <div className="flex min-h-[60vh] items-center justify-center"><History className="h-7 w-7 animate-pulse text-primary" /></div>;
+  if (isError || !project) return <div className="mx-auto max-w-4xl px-4 py-16 text-center text-muted-foreground">Could not load Version History for this project.</div>;
 
   return (
-    <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-      {/* Header */}
-      <div className="flex items-center gap-3 mb-8">
+    <div className="mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:px-8">
+      <header className="mb-7 flex flex-wrap items-center gap-3">
         <Button variant="ghost" size="sm" onClick={() => navigate('/saved')} className="gap-2 text-muted-foreground">
-          <ArrowLeft className="w-4 h-4" /> Back
+          <ArrowLeft className="h-4 w-4" /> Projects
         </Button>
-        <div className="flex-1">
-          <div className="flex items-center gap-2">
-            <GitBranch className="w-5 h-5 text-primary" />
-            <h1 className="text-2xl font-extrabold tracking-tight">{project?.title || 'Project'}</h1>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <GitBranch className="h-5 w-5 text-primary" />
+            <h1 className="truncate text-2xl font-extrabold tracking-tight">{project.title}</h1>
+            <Badge variant="outline" className={isReadOnly ? 'text-muted-foreground' : 'border-primary/30 text-primary'}>{isReadOnly ? 'Read-only' : 'Editable view'}</Badge>
           </div>
-          <p className="text-sm text-muted-foreground mt-0.5">{versions.length} version{versions.length !== 1 ? 's' : ''} · Version history</p>
+          <p className="mt-1 text-sm text-muted-foreground">Complete project history and the current version plan.</p>
         </div>
-        <div className="flex gap-2 flex-wrap">
-          <Button size="sm" variant="outline" className="gap-1.5 h-8 text-xs" onClick={handleSnapshot} disabled={createMutation.isPending}>
-            <Camera className="w-3.5 h-3.5" /> Save Snapshot
-          </Button>
-          <Button size="sm" variant="outline" className="gap-1.5 h-8 text-xs border-primary/40 text-primary hover:bg-primary/10" onClick={handleAiSuggest} disabled={aiLoading || createMutation.isPending}>
-            {aiLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
-            {aiLoading ? 'Generating...' : 'AI Suggest'}
-          </Button>
-          <Button size="sm" className="gap-1.5 h-8 text-xs bg-primary hover:bg-primary/90" onClick={() => setShowNewForm(v => !v)}>
-            <Plus className="w-3.5 h-3.5" /> New Version
-          </Button>
-        </div>
-      </div>
+        <Button size="sm" variant="outline" className="gap-1.5" onClick={() => navigate(isReadOnly ? `/versions/${projectId}` : `/versions/${projectId}?mode=view`)}>
+          {isReadOnly ? <Pencil className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+          {isReadOnly ? 'Edit mode' : 'Read-only'}
+        </Button>
+      </header>
 
-      {/* New version inline form */}
-      <AnimatePresence>
-        {showNewForm && (
-          <motion.div
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: 'auto' }}
-            exit={{ opacity: 0, height: 0 }}
-            className="overflow-hidden mb-6"
-          >
-            <div className="bg-card border border-primary/30 rounded-xl p-4 flex gap-3 items-center">
-              <Input
-                placeholder={`e.g. v0.${versions.length + 1}`}
-                value={newVersionLabel}
-                onChange={e => setNewVersionLabel(e.target.value)}
-                className="flex-1 h-9 text-sm"
-                onKeyDown={e => e.key === 'Enter' && handleCreate()}
-                autoFocus
-              />
-              <Button size="sm" onClick={handleCreate} disabled={createMutation.isPending} className="gap-1">
-                <Check className="w-3.5 h-3.5" /> Create
-              </Button>
-              <Button size="sm" variant="ghost" onClick={() => setShowNewForm(false)}>
-                <X className="w-3.5 h-3.5" />
-              </Button>
+      {allCompleted && !isReadOnly && (
+        <section className="mb-6 rounded-xl border border-primary/20 bg-primary/5 p-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="font-semibold">All planned versions are complete</h2>
+              <p className="text-sm text-muted-foreground">Add the next manually planned version when you are ready to continue.</p>
             </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+            <Button size="sm" onClick={() => { setNewVersionLabel(nextVersionLabel(versions)); setShowAddVersion(true); }} className="gap-1.5"><Plus className="h-3.5 w-3.5" /> Add Version</Button>
+          </div>
+        </section>
+      )}
 
-      {/* AI Suggestions review panel */}
-      <AnimatePresence>
-        {aiSuggestions && (
-          <motion.div
-            initial={{ opacity: 0, y: -10 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -10 }}
-            className="mb-6 bg-gradient-to-br from-primary/5 to-accent/30 border border-primary/20 rounded-2xl p-5"
-          >
-            <div className="flex items-center justify-between mb-3">
-              <div className="flex items-center gap-2">
-                <Sparkles className="w-4 h-4 text-primary" />
-                <p className="text-sm font-semibold text-primary">AI-Suggested Version</p>
+      <div className="grid gap-6 lg:grid-cols-[220px_minmax(0,1fr)]">
+        <aside>
+          <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Version History</p>
+          <div className="space-y-2">
+            {versions.map((version) => {
+              const selected = String(version.id) === String(selectedId);
+              return (
+                <button
+                  key={version.id}
+                  onClick={() => setSelectedId(version.id)}
+                  className={`w-full rounded-lg border px-3 py-2.5 text-left transition-colors ${selected ? 'border-primary/30 bg-primary/10' : 'border-border hover:bg-muted/60'}`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className={`font-mono text-sm font-semibold ${selected ? 'text-primary' : 'text-foreground'}`}>{version.label}</span>
+                    {version.status === 'locked' ? <LockKeyhole className="h-3.5 w-3.5 text-muted-foreground" /> : <GitBranch className="h-3.5 w-3.5 text-primary" />}
+                  </div>
+                  <span className={`mt-1 inline-block text-[10px] font-medium capitalize ${version.status === 'completed' ? 'text-green-600' : version.status === 'active' ? 'text-primary' : 'text-muted-foreground'}`}>{version.status}</span>
+                </button>
+              );
+            })}
+          </div>
+        </aside>
+
+        {selectedVersion && (
+          <main className="rounded-2xl border border-border bg-card p-5 sm:p-6">
+            <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <h2 className="font-mono text-2xl font-bold">Version {selectedVersion.label.replace(/^v/i, '')}</h2>
+                  <Badge className={statusClasses[selectedVersion.status] || statusClasses.locked}>{selectedVersion.status}</Badge>
+                </div>
+                <p className="mt-1 text-sm text-muted-foreground">{selectedVersion.status === 'active' ? 'This is the current version shown on the project card.' : selectedVersion.status === 'completed' ? 'Completed history is preserved and cannot be changed.' : 'This plan is visible but remains unavailable until the prior version is completed.'}</p>
               </div>
-              <button onClick={() => setAiSuggestions(null)} className="text-muted-foreground hover:text-foreground">
-                <X className="w-4 h-4" />
-              </button>
+              <div className="flex gap-2">
+                {canEditSelected && !draft && <Button size="sm" variant="outline" onClick={startEditing} className="gap-1.5"><Pencil className="h-3.5 w-3.5" /> Edit version</Button>}
+                {canEditSelected && <Button size="sm" onClick={openCompletion} disabled={Boolean(draft)} className="gap-1.5"><CheckCircle2 className="h-3.5 w-3.5" /> Complete version</Button>}
+              </div>
             </div>
 
-            {/* Editable label */}
-            <div className="flex items-center gap-2 mb-3">
-              <span className="text-xs text-muted-foreground">Label:</span>
-              <input
-                value={aiSuggestions.label}
-                onChange={e => setAiSuggestions(s => ({ ...s, label: e.target.value }))}
-                className="font-mono text-sm bg-card border border-border rounded px-2 py-0.5 outline-none focus:border-primary w-40"
-              />
-            </div>
+            <section className="mb-6">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Everything to build in this version · {displayFeatures.filter((feature) => feature.completed).length}/{displayFeatures.length} built</h3>
+                {draft && <span className="text-xs text-primary">Changes are not saved yet</span>}
+              </div>
+              <div className="space-y-2">
+                {displayFeatures.length === 0 ? (
+                  <p className="rounded-lg bg-muted/40 px-3 py-3 text-sm text-muted-foreground">No features are listed yet.</p>
+                ) : displayFeatures.map((feature) => (
+                  <div key={feature.id} className={`rounded-lg border px-3 py-2.5 ${feature.completed ? 'border-primary/15 bg-primary/5' : 'border-border bg-muted/20'}`}>
+                    <div className="flex items-start gap-2">
+                      {draft ? (
+                        <button type="button" onClick={() => updateFeature(feature.id, { completed: !feature.completed })} className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border ${feature.completed ? 'border-primary bg-primary text-white' : 'border-border bg-card text-transparent'}`} title="Mark feature built">
+                          <Check className="h-3 w-3" />
+                        </button>
+                      ) : (
+                        <CheckCircle2 className={`mt-0.5 h-4 w-4 shrink-0 ${feature.completed ? 'text-primary' : 'text-muted-foreground/40'}`} />
+                      )}
+                      <div className="min-w-0 flex-1">
+                        {draft ? (
+                          <Input value={feature.text} onChange={(event) => updateFeature(feature.id, { text: event.target.value })} className="h-8 text-sm" aria-label="Feature text" />
+                        ) : (
+                          <p className={`text-sm ${feature.completed ? 'text-muted-foreground line-through' : 'text-foreground'}`}>{feature.text}</p>
+                        )}
+                        <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                          <Badge variant="outline" className="h-5 px-1.5 text-[10px]">{featureSourceLabel(feature)}</Badge>
+                          {!feature.accepted && draft && <Button size="sm" variant="outline" className="h-6 px-2 text-[10px]" onClick={() => updateFeature(feature.id, { accepted: true })}>Keep</Button>}
+                          {feature.originalText && <span className="text-[10px] text-muted-foreground">Originally: {feature.originalText}</span>}
+                        </div>
+                      </div>
+                      {draft && <Button size="icon" variant="ghost" className="h-8 w-8 shrink-0 text-muted-foreground hover:bg-destructive/10 hover:text-destructive" onClick={() => deleteFeature(feature.id)} title="Delete feature" aria-label={`Delete ${feature.text}`}><Trash2 className="h-4 w-4" /></Button>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              {draft && (
+                <div className="mt-3 flex gap-2">
+                  <Input value={newFeature} onChange={(event) => setNewFeature(event.target.value)} onKeyDown={(event) => event.key === 'Enter' && addFeature()} placeholder="Add a new feature…" className="h-9" />
+                  <Button size="sm" variant="outline" onClick={addFeature} className="h-9 shrink-0 gap-1"><Plus className="h-3.5 w-3.5" /> Add</Button>
+                </div>
+              )}
+            </section>
 
-            {/* Notes */}
-            {aiSuggestions.notes && (
-              <p className="text-xs text-muted-foreground bg-muted/40 rounded-lg px-3 py-2 mb-3 leading-relaxed italic">
-                {aiSuggestions.notes}
-              </p>
+            <section className="border-t border-border pt-5">
+              <div className="mb-2 flex items-center justify-between gap-3">
+                <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Version details</h3>
+                {draft && <span className="text-xs text-primary">Editable while this version is active</span>}
+              </div>
+              {draft ? (
+                <div className="mb-5">
+                  <label className="mb-1.5 block text-xs font-medium text-muted-foreground" htmlFor="version-label">Version label</label>
+                  <Input id="version-label" value={draft.label} onChange={(event) => updateDraft({ label: event.target.value })} className="h-9 font-mono text-sm" maxLength={60} />
+                </div>
+              ) : (
+                <p className="mb-5 text-sm text-muted-foreground">Label: <span className="font-mono text-foreground">{selectedVersion.label}</span></p>
+              )}
+              <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Version notes</h3>
+              {draft ? <Textarea value={draft.notes} onChange={(event) => updateDraft({ notes: event.target.value })} className="min-h-[90px] text-sm" placeholder="Describe what changed in this version…" /> : <p className="rounded-lg bg-muted/30 px-3 py-2 text-sm leading-relaxed text-muted-foreground">{selectedVersion.notes || 'No version notes yet.'}</p>}
+              {draft && (
+                <div className="mt-3 flex flex-wrap justify-end gap-2">
+                  <Button size="sm" variant="ghost" onClick={() => setDraft(null)}>Cancel</Button>
+                  <Button size="sm" onClick={saveDraft} disabled={saveMutation.isPending} className="gap-1.5"><Save className="h-3.5 w-3.5" /> {saveMutation.isPending ? 'Saving…' : 'Save changes'}</Button>
+                </div>
+              )}
+            </section>
+
+            {selectedVersion.status === 'completed' && (
+              <section className="mt-6 border-t border-border pt-5">
+                <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Completion evidence</h3>
+                <p className="mb-3 flex items-center gap-1.5 text-sm text-muted-foreground"><Clock3 className="h-4 w-4" /> Time spent: {selectedVersion.completion_duration || 'Not recorded'}</p>
+                {selectedVersion.verification_image && <img src={selectedVersion.verification_image} alt={`Completion proof for ${selectedVersion.label}`} className="max-h-72 rounded-lg border border-border object-contain" />}
+              </section>
             )}
 
-            {/* Feature review — toggle each keep/discard */}
-            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">
-              Review Features — click to keep or discard
-            </p>
-            <div className="space-y-1.5 mb-4">
-              {aiSuggestions.features.map((f, i) => (
-                <button
-                  key={i}
-                  onClick={() => setAiSuggestions(s => ({
-                    ...s,
-                    features: s.features.map((feat, j) => j === i ? { ...feat, kept: !feat.kept } : feat),
-                  }))}
-                  className={`w-full flex items-center gap-3 rounded-lg px-3 py-2 text-left transition-all border ${
-                    f.kept
-                      ? 'bg-primary/8 border-primary/20 text-foreground'
-                      : 'bg-muted/20 border-transparent text-muted-foreground line-through opacity-50'
-                  }`}
-                >
-                  <div className={`w-4 h-4 rounded border-2 shrink-0 flex items-center justify-center transition-colors ${f.kept ? 'bg-primary border-primary' : 'border-border'}`}>
-                    {f.kept && <Check className="w-2.5 h-2.5 text-white" />}
-                  </div>
-                  <span className="text-sm">{f.text}</span>
-                </button>
-              ))}
-            </div>
-
-            <div className="flex gap-2">
-              <Button size="sm" className="gap-1.5 bg-primary hover:bg-primary/90 text-xs" onClick={acceptAiSuggestions} disabled={createMutation.isPending}>
-                <Check className="w-3.5 h-3.5" />
-                Create Version ({aiSuggestions.features.filter(f => f.kept).length} features)
-              </Button>
-              <Button size="sm" variant="ghost" className="text-xs" onClick={() => setAiSuggestions(null)}>
-                Discard
-              </Button>
-            </div>
-          </motion.div>
+            {featureHistory.length > 0 && (
+              <section className="mt-6 border-t border-border pt-5">
+                <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Feature change log</h3>
+                <ul className="space-y-1.5">
+                  {featureHistory.map((entry) => (
+                    <li key={entry.id} className="rounded-md bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
+                      <span className="font-medium capitalize text-foreground">{entry.action}</span>{' '}
+                      {entry.action === 'edited' ? <><span className="line-through">{entry.from}</span> → {entry.text}</> : entry.text}
+                      {entry.at && <span className="ml-2 text-xs text-muted-foreground/70">{new Date(entry.at).toLocaleString()}</span>}
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
+          </main>
         )}
-      </AnimatePresence>
+      </div>
 
-      {isLoading ? (
-        <p className="text-muted-foreground text-sm">Loading versions...</p>
-      ) : versions.length === 0 ? (
-        <div className="text-center py-24 text-muted-foreground">
-          <GitBranch className="w-12 h-12 mx-auto mb-3 opacity-20" />
-          <p className="font-medium text-base">No versions yet</p>
-          <p className="text-sm mt-1">Click "New Version" or "Save Snapshot" to capture the first state.</p>
-        </div>
-      ) : (
-        <div className="flex flex-col lg:flex-row gap-6">
-
-          {/* ── Timeline sidebar ── */}
-          <div className="lg:w-56 shrink-0">
-            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3">Timeline</p>
-            <div className="relative">
-              {/* Vertical line */}
-              <div className="absolute left-3.5 top-0 bottom-0 w-px bg-border" />
-              <div className="space-y-1">
-                {versions.map((v, i) => {
-                  const feats = v.features ? v.features.split('\n').filter(Boolean) : [];
-                  const isActive = selectedIdx === i;
-                  const isLast = i === versions.length - 1;
-                  return (
-                    <button
-                      key={v.id}
-                      onClick={() => { setSelectedIdx(i); setEditingFeatures(false); }}
-                      className={`w-full flex items-start gap-3 px-2 py-2 rounded-lg text-left transition-all relative z-10 ${isActive ? 'bg-primary/10' : 'hover:bg-muted/60'}`}
-                    >
-                      <div className={`mt-1 w-3.5 h-3.5 rounded-full border-2 shrink-0 transition-colors ${isActive ? 'bg-primary border-primary' : isLast ? 'bg-card border-primary/50' : 'bg-card border-border'}`} />
-                      <div className="min-w-0">
-                        <p className={`text-xs font-semibold font-mono truncate ${isActive ? 'text-primary' : 'text-foreground'}`}>{v.label}</p>
-                        <p className="text-[10px] text-muted-foreground">{feats.length} feature{feats.length !== 1 ? 's' : ''}</p>
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
+      <Dialog open={completionOpen} onOpenChange={setCompletionOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Complete {selectedVersion?.label}</DialogTitle>
+            <DialogDescription>Confirm completion, record the time spent, and upload a screenshot before the next version becomes active.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <label className="flex cursor-pointer items-start gap-2 text-sm"><input type="checkbox" checked={completionConfirmed} onChange={(event) => setCompletionConfirmed(event.target.checked)} className="mt-1" /> I confirm that this version is complete.</label>
+            <div><label className="mb-1.5 block text-sm font-medium">How long did this version take?</label><Input value={completionDuration} onChange={(event) => setCompletionDuration(event.target.value)} placeholder="e.g. 6 hours or 3 days" /></div>
+            <div>
+              <label className="mb-1.5 block text-sm font-medium">Screenshot proof</label>
+              <label className="flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-dashed border-border px-3 py-4 text-sm text-muted-foreground hover:bg-muted/40"><Upload className="h-4 w-4" /> {verificationFileName || 'Upload image (max 5 MB)'}<input type="file" accept="image/*" onChange={selectProofImage} className="hidden" /></label>
+              {verificationImage && <img src={verificationImage} alt="Selected completion proof" className="mt-3 max-h-40 rounded-lg border border-border object-contain" />}
             </div>
+            <Button className="w-full gap-2" onClick={() => completeMutation.mutate()} disabled={!completionConfirmed || !completionDuration.trim() || !verificationImage || completeMutation.isPending}><FileImage className="h-4 w-4" /> {completeMutation.isPending ? 'Completing…' : 'Complete and unlock next version'}</Button>
           </div>
+        </DialogContent>
+      </Dialog>
 
-          {/* ── Version detail panel ── */}
-          {selectedVersion && (
-            <div className="flex-1 min-w-0">
-              <motion.div
-                key={selectedVersion.id}
-                initial={{ opacity: 0, x: 12 }}
-                animate={{ opacity: 1, x: 0 }}
-                className="bg-card border border-border rounded-2xl p-6"
-              >
-                {/* Version header */}
-                <div className="flex items-center justify-between mb-5">
-                  <div className="flex items-center gap-3">
-                    <Badge className="font-mono text-sm bg-primary/10 text-primary border-primary/20 px-3 py-1">
-                      {editingFeatures ? (
-                        <input
-                          value={localLabel}
-                          onChange={e => setLocalLabel(e.target.value)}
-                          className="bg-transparent font-mono text-sm outline-none w-24"
-                        />
-                      ) : selectedVersion.label}
-                    </Badge>
-                    <span className="text-xs text-muted-foreground">{new Date(selectedVersion.created_date).toLocaleDateString()}</span>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    {/* Prev/Next navigation */}
-                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0" disabled={selectedIdx === 0} onClick={() => { setSelectedIdx(i => i - 1); setEditingFeatures(false); }}>
-                      <ChevronLeft className="w-4 h-4" />
-                    </Button>
-                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0" disabled={selectedIdx === versions.length - 1} onClick={() => { setSelectedIdx(i => i + 1); setEditingFeatures(false); }}>
-                      <ChevronRight className="w-4 h-4" />
-                    </Button>
-                    {!editingFeatures ? (
-                      <>
-                        <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-muted-foreground hover:text-primary" onClick={startEdit}>
-                          <Pencil className="w-3.5 h-3.5" />
-                        </Button>
-                        <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive" onClick={() => deleteMutation.mutate(selectedVersion.id)}>
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </Button>
-                      </>
-                    ) : (
-                      <>
-                        <Button size="sm" onClick={saveEdit} disabled={updateMutation.isPending} className="h-7 gap-1 text-xs bg-primary hover:bg-primary/90 px-3">
-                          <Save className="w-3 h-3" /> Save
-                        </Button>
-                        <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={cancelEdit}>
-                          Cancel
-                        </Button>
-                      </>
-                    )}
-                  </div>
-                </div>
-
-                {/* Features checklist */}
-                <div className="mb-5">
-                  <div className="flex items-center justify-between mb-3">
-                    <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-                      Features · {displayFeatures.filter(f => f.startsWith('✓ ')).length}/{displayFeatures.length} done
-                    </p>
-                    {!editingFeatures && (
-                      <button onClick={startEdit} className="text-xs text-primary hover:underline">Edit</button>
-                    )}
-                  </div>
-
-                  <div className="space-y-1.5">
-                    <AnimatePresence>
-                      {displayFeatures.length === 0 && (
-                        <p className="text-sm text-muted-foreground/60 italic">No features yet.</p>
-                      )}
-                      {displayFeatures.map((f, i) => {
-                        const done = f.startsWith('✓ ');
-                        const label = done ? f.slice(2) : f;
-                        return (
-                          <motion.div
-                            key={f + i}
-                            initial={{ opacity: 0, y: -4 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            exit={{ opacity: 0, y: -4 }}
-                            className={`flex items-center gap-3 rounded-lg px-3 py-2 group transition-colors ${done ? 'bg-primary/5' : 'bg-muted/40'}`}
-                          >
-                            {/* Checkbox toggle — always clickable */}
-                            <button
-                              onClick={() => {
-                                if (editingFeatures) {
-                                  toggleFeature(f);
-                                } else {
-                                  // Quick toggle without full edit mode
-                                  const updated = displayFeatures.map(feat =>
-                                    feat === f ? (feat.startsWith('✓ ') ? feat.slice(2) : '✓ ' + feat) : feat
-                                  );
-                                  updateMutation.mutate({
-                                    vid: selectedVersion.id,
-                                    data: { features: updated.join('\n') },
-                                  });
-                                }
-                              }}
-                              className={`w-4 h-4 rounded border-2 shrink-0 flex items-center justify-center transition-colors ${done ? 'bg-primary border-primary' : 'border-border hover:border-primary'}`}
-                            >
-                              {done && <Check className="w-2.5 h-2.5 text-white" />}
-                            </button>
-                            <span className={`text-sm flex-1 ${done ? 'line-through text-muted-foreground' : 'text-foreground'}`}>{label}</span>
-                            {editingFeatures && (
-                              <button onClick={() => removeFeature(f)} className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-opacity">
-                                <X className="w-3.5 h-3.5" />
-                              </button>
-                            )}
-                          </motion.div>
-                        );
-                      })}
-                    </AnimatePresence>
-                  </div>
-
-                  {/* Add feature input — only when editing */}
-                  {editingFeatures && (
-                    <div className="flex gap-2 mt-3">
-                      <Input
-                        value={newFeatureText}
-                        onChange={e => setNewFeatureText(e.target.value)}
-                        onKeyDown={e => e.key === 'Enter' && addFeature()}
-                        placeholder="Add a feature..."
-                        className="h-8 text-sm flex-1"
-                        autoFocus
-                      />
-                      <Button size="sm" variant="outline" onClick={addFeature} className="h-8 gap-1 text-xs shrink-0">
-                        <Plus className="w-3 h-3" /> Add
-                      </Button>
-                    </div>
-                  )}
-                </div>
-
-                {/* Notes / summary */}
-                <div>
-                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Change Summary</p>
-                  {editingFeatures ? (
-                    <Textarea
-                      value={localNotes}
-                      onChange={e => setLocalNotes(e.target.value)}
-                      placeholder="Why did you make these changes? What did you adjust?"
-                      className="text-sm min-h-[80px] resize-none"
-                    />
-                  ) : selectedVersion.notes ? (
-                    <p className="text-sm text-muted-foreground bg-muted/30 rounded-lg px-3 py-2 leading-relaxed">
-                      {selectedVersion.notes}
-                    </p>
-                  ) : (
-                    <button
-                      onClick={startEdit}
-                      className="text-xs text-muted-foreground hover:text-primary flex items-center gap-1.5 border border-dashed border-border rounded-lg px-3 py-2 w-full text-left"
-                    >
-                      <Plus className="w-3.5 h-3.5" /> Add a change summary...
-                    </button>
-                  )}
-                </div>
-              </motion.div>
-
-              {/* Prev / Next navigation footer */}
-              <div className="flex items-center justify-between mt-4 px-1">
-                <Button
-                  size="sm" variant="ghost"
-                  className="gap-1.5 text-xs text-muted-foreground"
-                  disabled={selectedIdx === 0}
-                  onClick={() => { setSelectedIdx(i => i - 1); setEditingFeatures(false); }}
-                >
-                  <ChevronLeft className="w-3.5 h-3.5" />
-                  {versions[selectedIdx - 1]?.label || ''}
-                </Button>
-                <span className="text-xs text-muted-foreground">{selectedIdx + 1} / {versions.length}</span>
-                <Button
-                  size="sm" variant="ghost"
-                  className="gap-1.5 text-xs text-muted-foreground"
-                  disabled={selectedIdx === versions.length - 1}
-                  onClick={() => { setSelectedIdx(i => i + 1); setEditingFeatures(false); }}
-                >
-                  {versions[selectedIdx + 1]?.label || ''}
-                  <ChevronRight className="w-3.5 h-3.5" />
-                </Button>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
+      <Dialog open={showAddVersion} onOpenChange={setShowAddVersion}>
+        <DialogContent className="max-w-md">
+          <DialogHeader><DialogTitle>Add the next version</DialogTitle><DialogDescription>Create a new active version after the three-stage plan is complete.</DialogDescription></DialogHeader>
+          <div className="space-y-3">
+            <Input value={newVersionLabel} onChange={(event) => setNewVersionLabel(event.target.value)} placeholder="Version label" />
+            <Textarea value={newVersionNotes} onChange={(event) => setNewVersionNotes(event.target.value)} placeholder="Version notes" />
+            <Textarea value={newVersionFeatures} onChange={(event) => setNewVersionFeatures(event.target.value)} placeholder="Optional initial features, one per line" />
+            <Button className="w-full" onClick={() => createMutation.mutate()} disabled={createMutation.isPending}>{createMutation.isPending ? 'Creating…' : 'Create active version'}</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

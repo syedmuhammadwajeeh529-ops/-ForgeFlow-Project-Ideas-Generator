@@ -3,7 +3,6 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Sparkles, Loader2, BookmarkPlus, RefreshCw } from 'lucide-react';
-import { base44 } from '@/api/base44Client';
 import { Badge } from '@/components/ui/badge';
 
 const CATEGORIES = ['Web', 'Mobile', 'AI/ML', 'CLI', 'Game', 'API', 'Data', 'DevOps'];

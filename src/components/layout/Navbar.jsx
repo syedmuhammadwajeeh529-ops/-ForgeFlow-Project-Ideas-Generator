@@ -1,8 +1,7 @@
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { Sparkles, BookMarked, MonitorSmartphone } from 'lucide-react';
+import { Sparkles, BookMarked } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { base44 } from '@/api/base44Client';
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState } from 'react';
 
 const CATEGORIES = ['All', 'Web', 'Mobile', 'AI/ML', 'CLI', 'Game', 'API', 'Data', 'DevOps'];
 
@@ -12,8 +11,9 @@ export default function Navbar() {
   const [user, setUser] = useState(null);
 
   useEffect(() => {
-    base44.auth.me().then(setUser).catch(() => {});
-  }, []);
+  // Authentication temporarily disabled
+  setUser(null);
+}, []);
 
   const currentCategory = new URLSearchParams(location.search).get('category') || 'All';
   const isExplorePage = location.pathname === '/';

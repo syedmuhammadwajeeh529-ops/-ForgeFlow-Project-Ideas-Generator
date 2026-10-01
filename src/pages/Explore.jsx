@@ -1,30 +1,13 @@
-import { useState, useCallback, useEffect, useRef } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
-import { base44 } from '@/api/base44Client';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import IdeaCard from "../components/ideas/IdeaCard";
+import React, { useRef, useState } from 'react';
 import { useToast } from '@/components/ui/use-toast';
-import IdeaCard from '@/components/ideas/IdeaCard';
-import AIGeneratorPanel from '@/components/ideas/AIGeneratorPanel';
+import { useLocation } from 'react-router-dom';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import FiltersBar from '@/components/ideas/FiltersBar';
-import IdeaDetailModal from '@/components/ideas/IdeaDetailModal';
-import IdeaCompareModal from '@/components/ideas/IdeaCompareModal';
 import { Button } from '@/components/ui/button';
-import { Loader2, Shuffle, Mic, MicOff, GitCompareArrows, X } from 'lucide-react';
-
+import { Shuffle, Mic, MicOff, Loader2 } from 'lucide-react';
+import IdeaDetailModal from '@/components/ideas/IdeaDetailModal';
 const SOFTWARE_IDEAS = [
-  // Web
-  { id: 's1', title: 'Invoice Generator', category: 'Web', difficulty: 'Beginner', description: 'A web-based tool for freelancers to create, send, and track invoices with PDF export.', tech_stack: ['React', 'Node.js', 'Stripe'], is_curated: true, tags: ['Finance', 'Freelance', 'PDF'] },
-  { id: 's2', title: 'Personal Dashboard', category: 'Web', difficulty: 'Intermediate', description: 'A customizable browser start page with widgets for weather, tasks, bookmarks, and news.', tech_stack: ['React', 'Tailwind CSS', 'REST APIs'], is_curated: true, tags: ['Productivity', 'Dashboard'] },
-  { id: 's3', title: 'Recipe Sharing Platform', category: 'Web', difficulty: 'Intermediate', description: 'A community website where users can post, rate, and comment on recipes with ingredient search.', tech_stack: ['React', 'Node.js', 'MongoDB'], is_curated: false, tags: ['Food', 'Community', 'Search'] },
-  { id: 's4', title: 'Job Board', category: 'Web', difficulty: 'Intermediate', description: 'A niche job listing site where employers post and developers apply, with email notifications.', tech_stack: ['Next.js', 'PostgreSQL', 'Resend'], is_curated: true, tags: ['Jobs', 'SaaS'] },
-  { id: 's5', title: 'URL Shortener', category: 'Web', difficulty: 'Beginner', description: 'A web service that creates short links with click analytics and custom slugs.', tech_stack: ['Node.js', 'Redis', 'React'], is_curated: false, tags: ['Utility', 'Analytics'] },
-  { id: 's6', title: 'Portfolio Builder', category: 'Web', difficulty: 'Beginner', description: 'A drag-and-drop tool for developers to create and publish a personal portfolio site.', tech_stack: ['React', 'Firebase', 'Tailwind CSS'], is_curated: true, tags: ['Portfolio', 'Builder'] },
-  { id: 's7', title: 'Event Ticketing App', category: 'Web', difficulty: 'Advanced', description: 'A web platform to create events, sell tickets, and manage attendees with QR code check-in.', tech_stack: ['Next.js', 'Stripe', 'QRCode'], is_curated: false, tags: ['Events', 'Payments'] },
-  { id: 's8', title: 'Bookmark Manager', category: 'Web', difficulty: 'Beginner', description: 'A web app to save, tag, and search bookmarks with browser extension sync.', tech_stack: ['React', 'SQLite', 'Chrome Extension API'], is_curated: false, tags: ['Productivity', 'Bookmarks'] },
-  // Mobile
-  { id: 'm1', title: 'Habit Tracker App', category: 'Mobile', difficulty: 'Beginner', description: 'A mobile app to build and track daily habits with streaks, reminders, and progress charts.', tech_stack: ['React Native', 'AsyncStorage', 'Expo'], is_curated: true, tags: ['Health', 'Productivity'] },
-  { id: 'm2', title: 'Expense Splitter', category: 'Mobile', difficulty: 'Intermediate', description: 'A mobile app to split bills among friends, track debts, and settle up with payment links.', tech_stack: ['React Native', 'Firebase', 'Stripe'], is_curated: true, tags: ['Finance', 'Social'] },
-  { id: 'm3', title: 'Local Events Finder', category: 'Mobile', difficulty: 'Intermediate', description: 'A location-based mobile app to discover nearby events, concerts, and meetups.', tech_stack: ['React Native', 'Google Maps API', 'Expo'], is_curated: false, tags: ['Events', 'Location'] },
   { id: 'm4', title: 'Flashcard Study App', category: 'Mobile', difficulty: 'Beginner', description: 'A mobile flashcard app with spaced repetition algorithm to help users memorize anything.', tech_stack: ['React Native', 'SQLite', 'Expo'], is_curated: true, tags: ['Education', 'Learning'] },
   { id: 'm5', title: 'Sleep Tracker', category: 'Mobile', difficulty: 'Intermediate', description: 'A mobile app that logs sleep duration and quality with graphs and smart alarm suggestions.', tech_stack: ['React Native', 'HealthKit', 'Expo'], is_curated: false, tags: ['Health', 'Sleep'] },
   { id: 'm6', title: 'Plant Care Reminder', category: 'Mobile', difficulty: 'Beginner', description: 'A mobile app to track houseplants, set watering reminders, and log plant health.', tech_stack: ['React Native', 'Notifications API', 'Expo'], is_curated: true, tags: ['Lifestyle', 'Reminders'] },
@@ -66,11 +49,9 @@ const SOFTWARE_IDEAS = [
 
 export default function Explore() {
   const [search, setSearch] = useState('');
-  const [displayedIdeas, setDisplayedIdeas] = useState(null);
   const [selectedIdea, setSelectedIdea] = useState(null);
-  const [compareIdeas, setCompareIdeas] = useState([]);
-  const [showCompare, setShowCompare] = useState(false);
-  const [seed, setSeed] = useState(() => Math.random());
+  const [ideaPrompt, setIdeaPrompt] = useState('');
+  const [generationKey, setGenerationKey] = useState(0);
   const [plannerText, setPlannerText] = useState('');
   const [aiGenerating, setAiGenerating] = useState(false);
   const [aiIdeas, setAiIdeas] = useState(null);
@@ -78,108 +59,195 @@ export default function Explore() {
   const micRef = useRef(null);
   const [micListening, setMicListening] = useState(false);
   const { toast } = useToast();
-  const navigate = useNavigate();
   const location = useLocation();
   const queryClient = useQueryClient();
 
   const category = new URLSearchParams(location.search).get('category') || 'All';
 
-  const { data: ideas = [], isLoading } = useQuery({
-    queryKey: ['project-ideas'],
-    queryFn: () => base44.entities.ProjectIdea.list('-created_date', 100),
-  });
+  const { data: savedProjects = [], isLoading: isLoadingSavedProjects } = useQuery({
+  queryKey: ['saved-projects'],
+  queryFn: async () => {
+    const res = await fetch("http://localhost:5000/api/saved-projects");
+    return res.json();
+  },
+});
 
-  const { data: savedProjects = [] } = useQuery({
-    queryKey: ['saved-projects'],
-    queryFn: () => base44.entities.SavedProject.list('-updated_date', 100),
+  const savedTitles = savedProjects
+    .map((project) => project.title)
+    .filter((title) => typeof title === 'string' && title.trim());
+  const savedTitleKey = savedTitles
+    .map((title) => title.trim().toLocaleLowerCase())
+    .sort()
+    .join('|');
+
+  const {
+    data: generatedIdeas = [],
+    isLoading: isLoadingGeneratedIdeas,
+    isError: hasGenerationError,
+  } = useQuery({
+    queryKey: ['fresh-project-ideas', category, generationKey],
+    enabled: !isLoadingSavedProjects && !plannerText.trim() && !aiGenerating,
+    staleTime: 0,
+    gcTime: 30 * 60 * 1000,
+    refetchOnWindowFocus: false,
+    queryFn: async () => {
+      const params = new URLSearchParams({
+        category,
+        excluded_titles: JSON.stringify(savedTitles),
+      });
+
+      console.log("PROJECT IDEAS FETCH: React Query initial generation", {
+        category,
+        plannerText,
+        aiGenerating,
+      });
+
+      const response = await fetch(`http://localhost:5000/api/project-ideas?${params}`);
+
+      if (!response.ok) {
+        throw new Error('Idea generation is temporarily unavailable.');
+      }
+
+      const ideas = await response.json();
+
+      if (!Array.isArray(ideas)) {
+        throw new Error('The idea generator returned an invalid response.');
+      }
+
+      return ideas;
+    },
   });
 
   const saveProjectMutation = useMutation({
-    mutationFn: async (idea) => {
-      const saved = await base44.entities.SavedProject.create({
-        idea_id: idea.id || 'ai-generated',
-        title: idea.title,
+  mutationFn: async (idea) => {
+    const response = await fetch("http://localhost:5000/api/saved-projects", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        idea_id: idea.id,        title: idea.title,
         description: idea.description,
         difficulty: idea.difficulty,
         category: idea.category,
         tech_stack: idea.tech_stack || [],
-        code: '',
-        language: 'javascript',
-        status: 'saved',
-      });
-      return saved;
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['saved-projects'] });
-      toast({ title: 'Project saved!', description: 'Find it in My Projects.' });
-    },
+        code: "",
+        language: "javascript",
+        notes: "",
+        status: "saved",
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error("Failed to save project");
+    }
+
+    return await response.json();
+  },
+
+  onSuccess: (result, idea) => {
+  queryClient.setQueryData(['saved-projects'], (current = []) => {
+    const nextProject = {
+      id: result.id,
+      idea_id: idea.id,
+      title: idea.title,
+      description: idea.description,
+      difficulty: idea.difficulty,
+      category: idea.category,
+      tech_stack: idea.tech_stack || [],
+      code: "",
+      language: "javascript",
+      notes: "",
+      status: "saved",
+    };
+
+    if (current.some((project) => String(project.id) === String(result.id))) {
+      return current;
+    }
+
+    return [...current, nextProject];
   });
 
-  const allIdeas = [...ideas, ...SOFTWARE_IDEAS];
+  toast({
+    title: "Project saved!",
+    description: "Find it in My Projects.",
+  });
+},
 
-  const getRandomFive = (pool) => {
-    return [...pool].sort(() => Math.random() - 0.5).slice(0, 5);
-  };
-
-  const defaultIdeas = useCallback(() => {
-    const categoryPool = allIdeas.filter(idea => category === 'All' || idea.category === category);
-    return getRandomFive(categoryPool);
-  }, [ideas.length, seed, category])();
-
-  const extractDifficulty = (text) => {
-    const lower = text.toLowerCase();
-    if (lower.includes('beginner') || lower.includes('easy') || lower.includes('simple')) return 'Beginner';
-    if (lower.includes('intermediate') || lower.includes('medium')) return 'Intermediate';
-    if (lower.includes('advanced') || lower.includes('hard') || lower.includes('expert')) return 'Advanced';
-    return null;
-  };
+  onError: (error) => {
+    toast({
+      title: "Save failed",
+      description: error.message,
+      variant: "destructive",
+    });
+  },
+});
 
   const handleSearch = () => {
-    const difficulty = extractDifficulty(search);
-    const pool = allIdeas.filter(idea => {
-      const matchCategory = category === 'All' || idea.category === category;
-      const matchDifficulty = !difficulty || idea.difficulty === difficulty;
-      const cleanSearch = search.replace(/projects?\s+for\s+/i, '').replace(/beginner|intermediate|advanced|easy|medium|hard|simple|expert/gi, '').trim();
-      const matchSearch = !cleanSearch || idea.title?.toLowerCase().includes(cleanSearch.toLowerCase()) || idea.description?.toLowerCase().includes(cleanSearch.toLowerCase());
-      return matchCategory && matchDifficulty && matchSearch;
-    });
-    setDisplayedIdeas(getRandomFive(pool));
-  };
+  // Small search box searches existing ideas only.
+  // It must NOT trigger AI idea generation.
+  setSearch(search.trim());
+};
 
-  const filteredIdeas = aiIdeas ?? displayedIdeas ?? defaultIdeas;
+  const savedTitleSet = new Set(savedTitles.map((title) => title.trim().toLocaleLowerCase()));
+  const isSavedIdea = (idea) => savedProjects.some(
+    (project) => project.idea_id === idea.id
+      || project.title?.trim().toLocaleLowerCase() === idea.title?.trim().toLocaleLowerCase()
+  );
+  const searchTerm = search.trim().toLocaleLowerCase();
+
+  const filteredIdeas = (aiIdeas ?? generatedIdeas).filter((idea) => {
+    if (
+      isSavedIdea(idea) ||
+      savedTitleSet.has(idea.title?.trim().toLocaleLowerCase())
+    ) {
+      return false;
+    }
+
+    if (!searchTerm) {
+      return true;
+    }
+
+    const searchableText = [
+      idea.title,
+      idea.description,
+      idea.category,
+      idea.difficulty,
+      ...(idea.tech_stack || []),
+      ...(idea.features || []),
+      ...(idea.tags || []),
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLocaleLowerCase();
+
+    return searchableText.includes(searchTerm);
+  });
+console.log("GENERATED IDEAS:", generatedIdeas);
+console.log("FILTERED IDEAS:", filteredIdeas);
 
   const generateAiIdeas = async (text) => {
     if (!text.trim()) { setAiIdeas(null); return; }
     setAiGenerating(true);
-    const result = await base44.integrations.Core.InvokeLLM({
-      prompt: `Generate exactly 5 distinct project idea variations based on this concept: "${text}".
-Each variation should be a specific, concrete take on the concept — like different implementations, board sizes, modes, mechanics, or scopes. For example, if the input is "tic tac toe game", generate variations like: 3x3 classic, 4x4 extended, 5x5 strategy, AI opponent, multiplayer online, etc.
-If it's "todo app", generate: minimalist CLI todo, drag-and-drop web todo, team collaborative todo, voice-input todo, gamified todo with streaks.
-Always stay true to the exact concept typed — do NOT change it to a different domain or category.
-Return JSON array of 5 objects.`,
-      response_json_schema: {
-        type: 'object',
-        properties: {
-          ideas: {
-            type: 'array',
-            items: {
-              type: 'object',
-              properties: {
-                title: { type: 'string' },
-                description: { type: 'string' },
-                difficulty: { type: 'string', enum: ['Beginner', 'Intermediate', 'Advanced'] },
-                category: { type: 'string', enum: ['Web', 'Mobile', 'AI/ML', 'CLI', 'Game', 'API', 'Data', 'DevOps', 'Other'] },
-                tech_stack: { type: 'array', items: { type: 'string' } },
-                tags: { type: 'array', items: { type: 'string' } },
-              },
-            },
-          },
-        },
-      },
-    });
-    const ideas = (result.ideas || []).map((idea, i) => ({ ...idea, id: `ai-planner-${i}-${Date.now()}`, is_curated: false }));
-    setAiIdeas(ideas);
-    setAiGenerating(false);
+    try {
+      const params = new URLSearchParams({
+        prompt: text,
+        category,
+        excluded_titles: JSON.stringify(savedTitles),
+      });
+      const response = await fetch(`http://localhost:5000/api/project-ideas?${params}`);
+
+      if (!response.ok) {
+        throw new Error("Idea generation is temporarily unavailable.");
+      }
+
+      const ideas = await response.json();
+      setAiIdeas(ideas.map((idea, i) => ({ ...idea, id: `ai-planner-${i}-${Date.now()}`, is_curated: false })));
+    } catch (error) {
+      toast({ title: "Could not generate ideas", description: error.message, variant: "destructive" });
+    } finally {
+      setAiGenerating(false);
+    }
   };
 
   const togglePlannerMic = () => {
@@ -210,14 +278,6 @@ Return JSON array of 5 objects.`,
     return saved;
   };
 
-  const toggleCompare = (idea) => {
-    setCompareIdeas(prev => {
-      if (prev.find(i => i.id === idea.id)) return prev.filter(i => i.id !== idea.id);
-      if (prev.length >= 2) return prev; // max 2
-      return [...prev, idea];
-    });
-  };
-
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
       {/* Hero */}
@@ -239,12 +299,23 @@ Return JSON array of 5 objects.`,
       </div>
 
       {/* Filters */}
-      <FiltersBar search={search} setSearch={(v) => { setSearch(v); setDisplayedIdeas(null); }} onSearch={handleSearch} />
+      <FiltersBar search={search} setSearch={setSearch} onSearch={handleSearch} />
 
       {/* Shuffle button */}
       <div className="mb-6 flex justify-center">
         <Button
-          onClick={() => { setDisplayedIdeas(null); setSeed(Math.random()); }}
+          onClick={async () => {
+  setPlannerText('');
+  setAiIdeas(null);
+  setSearch('');
+  setIdeaPrompt('');
+
+  await queryClient.invalidateQueries({
+    queryKey: ['fresh-project-ideas', category],
+  });
+
+  setGenerationKey((key) => key + 1);
+}}
           className="gap-2 bg-green-500 hover:bg-green-600 text-white shadow-md shadow-green-200"
         >
           <Shuffle className="w-4 h-4" />
@@ -289,45 +360,40 @@ Return JSON array of 5 objects.`,
             )}
           </div>
         </div>
-        {aiGenerating && (
+        {(aiGenerating || (!aiIdeas && isLoadingGeneratedIdeas)) && (
           <div className="flex items-center gap-2 mt-3 text-sm text-muted-foreground">
             <Loader2 className="w-4 h-4 animate-spin text-primary" />
-            Generating ideas for "<span className="font-medium text-foreground">{plannerText}</span>"...
+            {aiGenerating ? (
+              <>Generating ideas for "<span className="font-medium text-foreground">{plannerText}</span>"...</>
+            ) : 'Finding five fresh ideas...'}
           </div>
         )}
       </div>
 
       {/* Ideas Grid — 16 columns on xl */}
-      {isLoading ? (
-        <div className="flex items-center justify-center py-24">
-          <Loader2 className="w-8 h-8 animate-spin text-primary" />
+      {aiGenerating || (!aiIdeas && isLoadingGeneratedIdeas) ? null : hasGenerationError ? (
+        <div className="text-center py-24 text-muted-foreground">
+          <p className="text-lg font-medium">Could not load fresh ideas</p>
+          <p className="text-sm mt-1">Make sure the local API server is running, then try again.</p>
         </div>
-      ) : aiGenerating ? null : filteredIdeas.length === 0 ? (
+      ) : filteredIdeas.length === 0 ? (
         <div className="text-center py-24 text-muted-foreground">
           <p className="text-lg font-medium">No ideas found</p>
           <p className="text-sm mt-1">Try different keywords or shuffle for new ideas.</p>
         </div>
       ) : (
         <div className="grid gap-3" style={{ gridTemplateColumns: '1fr' }}>
-          {filteredIdeas.map((idea, i) => {
-            const saved = savedProjects.find(p => p.idea_id === idea.id || p.title === idea.title);
-            const isComparing = compareIdeas.some(c => c.id === idea.id);
-            const compareDisabled = compareIdeas.length >= 2 && !isComparing;
-            return (
-              <IdeaCard
-                key={idea.id}
-                idea={idea}
-                index={i}
-                onSave={handleSaveAndReturn}
-                onOpen={setSelectedIdea}
-                isSaving={saveProjectMutation.isPending}
-                savedProjectId={saved?.id || null}
-                isComparing={isComparing}
-                compareDisabled={compareDisabled}
-                onToggleCompare={toggleCompare}
-              />
-            );
-          })}
+         {filteredIdeas.map((idea, i) => (
+  <IdeaCard
+    key={idea.id}
+    idea={idea}
+    index={i}
+    onSave={handleSaveAndReturn}
+    onOpen={setSelectedIdea}
+    isSaving={saveProjectMutation.isPending}
+    savedProjectId={null}
+  />
+))}
         </div>
       )}
 
@@ -335,45 +401,6 @@ Return JSON array of 5 objects.`,
         idea={selectedIdea}
         open={!!selectedIdea}
         onClose={() => setSelectedIdea(null)}
-        onSave={handleSaveAndReturn}
-        isSaving={saveProjectMutation.isPending}
-      />
-
-      {/* Floating compare bar */}
-      {compareIdeas.length > 0 && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 bg-card border border-border shadow-xl rounded-2xl px-5 py-3">
-          <span className="text-sm font-medium text-muted-foreground">
-            {compareIdeas.length === 1 ? 'Select 1 more to compare' : '2 ideas selected'}
-          </span>
-          <div className="flex items-center gap-2">
-            {compareIdeas.map(idea => (
-              <div key={idea.id} className="flex items-center gap-1 bg-muted rounded-lg px-2.5 py-1 text-xs font-medium max-w-[140px] truncate">
-                <span className="truncate">{idea.title}</span>
-                <button onClick={() => toggleCompare(idea)} className="ml-1 text-muted-foreground hover:text-foreground shrink-0">
-                  <X className="w-3 h-3" />
-                </button>
-              </div>
-            ))}
-          </div>
-          <Button
-            size="sm"
-            className="gap-1.5 h-8"
-            disabled={compareIdeas.length < 2}
-            onClick={() => setShowCompare(true)}
-          >
-            <GitCompareArrows className="w-3.5 h-3.5" />
-            Compare
-          </Button>
-          <button onClick={() => setCompareIdeas([])} className="text-muted-foreground hover:text-foreground ml-1">
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-      )}
-
-      <IdeaCompareModal
-        open={showCompare}
-        onClose={() => setShowCompare(false)}
-        ideas={compareIdeas}
         onSave={handleSaveAndReturn}
         isSaving={saveProjectMutation.isPending}
       />

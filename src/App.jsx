@@ -8,7 +8,6 @@ import UserNotRegisteredError from '@/components/UserNotRegisteredError';
 import AppLayout from './components/layout/AppLayout';
 import Explore from './pages/Explore';
 import SavedProjects from './pages/SavedProjects';
-import Editor from './pages/Editor';
 import ProjectVersions from './pages/ProjectVersions';
 
 
@@ -37,8 +36,6 @@ const AuthenticatedApp = () => {
       <Route element={<AppLayout />}>
         <Route path="/" element={<Explore />} />
         <Route path="/saved" element={<SavedProjects />} />
-
-        <Route path="/editor/:id" element={<Editor />} />
         <Route path="/versions/:id" element={<ProjectVersions />} />
       </Route>
       <Route path="*" element={<PageNotFound />} />
