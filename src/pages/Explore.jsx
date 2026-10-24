@@ -1,5 +1,6 @@
 import IdeaCard from "../components/ideas/IdeaCard";
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import { IDEAS_PER_PAGE, normalizeTitle, collectUniqueIdeas } from '@/lib/unique-ideas';
 import { useToast } from '@/components/ui/use-toast';
 import { useLocation } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -47,8 +48,31 @@ const SOFTWARE_IDEAS = [
   { id: 'dv4', title: 'Secret Rotation Tool', category: 'DevOps', difficulty: 'Advanced', description: 'A CLI/dashboard to manage and auto-rotate API keys and secrets across services securely.', tech_stack: ['Node.js', 'Vault', 'AWS Secrets Manager'], is_curated: false, tags: ['Security', 'Secrets'] },
 ];
 
+async function requestIdeaBatch({ category, prompt, excludedTitles, count }) {
+  const params = new URLSearchParams({
+    category,
+    excluded_titles: JSON.stringify(excludedTitles),
+    count: String(count),
+    nonce: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+  });
+  if (prompt) params.set('prompt', prompt);
+
+  const response = await fetch(`http://localhost:5000/api/project-ideas?${params}`);
+  if (!response.ok) {
+    throw new Error('Idea generation is temporarily unavailable.');
+  }
+
+  const ideas = await response.json();
+  if (!Array.isArray(ideas)) {
+    throw new Error('The idea generator returned an invalid response.');
+  }
+  return ideas;
+}
+
 export default function Explore() {
   const [search, setSearch] = useState('');
+  const [toppingUp, setToppingUp] = useState(false);
+  const topUpKeyRef = useRef('');
   const [selectedIdea, setSelectedIdea] = useState(null);
   const [ideaPrompt, setIdeaPrompt] = useState('');
   const [generationKey, setGenerationKey] = useState(0);
@@ -76,7 +100,7 @@ export default function Explore() {
     .map((project) => project.title)
     .filter((title) => typeof title === 'string' && title.trim());
   const savedTitleKey = savedTitles
-    .map((title) => title.trim().toLocaleLowerCase())
+    .map(normalizeTitle)
     .sort()
     .join('|');
 
@@ -90,32 +114,13 @@ export default function Explore() {
     staleTime: 0,
     gcTime: 30 * 60 * 1000,
     refetchOnWindowFocus: false,
-    queryFn: async () => {
-      const params = new URLSearchParams({
-        category,
-        excluded_titles: JSON.stringify(savedTitles),
-      });
-
-      console.log("PROJECT IDEAS FETCH: React Query initial generation", {
-        category,
-        plannerText,
-        aiGenerating,
-      });
-
-      const response = await fetch(`http://localhost:5000/api/project-ideas?${params}`);
-
-      if (!response.ok) {
-        throw new Error('Idea generation is temporarily unavailable.');
-      }
-
-      const ideas = await response.json();
-
-      if (!Array.isArray(ideas)) {
-        throw new Error('The idea generator returned an invalid response.');
-      }
-
-      return ideas;
-    },
+    queryFn: () =>
+      collectUniqueIdeas({
+        excludedTitles: savedTitles,
+        count: IDEAS_PER_PAGE,
+        fetchBatch: ({ excludedTitles, count }) =>
+          requestIdeaBatch({ category, excludedTitles, count }),
+      }),
   });
 
   const saveProjectMutation = useMutation({
@@ -189,21 +194,69 @@ export default function Explore() {
   setSearch(search.trim());
 };
 
-  const savedTitleSet = new Set(savedTitles.map((title) => title.trim().toLocaleLowerCase()));
+  const savedTitleSet = new Set(savedTitles.map(normalizeTitle));
   const isSavedIdea = (idea) => savedProjects.some(
     (project) => project.idea_id === idea.id
-      || project.title?.trim().toLocaleLowerCase() === idea.title?.trim().toLocaleLowerCase()
+      || normalizeTitle(project.title) === normalizeTitle(idea.title)
   );
   const searchTerm = search.trim().toLocaleLowerCase();
 
-  const filteredIdeas = (aiIdeas ?? generatedIdeas).filter((idea) => {
-    if (
-      isSavedIdea(idea) ||
-      savedTitleSet.has(idea.title?.trim().toLocaleLowerCase())
-    ) {
+  // Ideas that are not saved and not duplicated on screen.
+  const shownTitles = new Set();
+  const unsavedIdeas = (aiIdeas ?? generatedIdeas).filter((idea) => {
+    const key = normalizeTitle(idea.title);
+    if (!key || shownTitles.has(key) || isSavedIdea(idea) || savedTitleSet.has(key)) {
       return false;
     }
+    shownTitles.add(key);
+    return true;
+  });
 
+  // When an idea is saved it leaves the page, so ask for a replacement
+  // to keep the page at exactly five ideas.
+  useEffect(() => {
+    if (isLoadingSavedProjects || isLoadingGeneratedIdeas || aiGenerating || toppingUp) return;
+    if (hasGenerationError) return;
+    if (!aiIdeas && plannerText.trim()) return;
+    if (!aiIdeas && generatedIdeas.length === 0) return;
+    if (unsavedIdeas.length >= IDEAS_PER_PAGE) return;
+
+    const key = [category, generationKey, aiIdeas ? 'ai' : 'fresh', savedTitleKey, unsavedIdeas.length].join('|');
+    if (topUpKeyRef.current === key) return;
+    topUpKeyRef.current = key;
+
+    setToppingUp(true);
+    collectUniqueIdeas({
+      excludedTitles: savedTitles,
+      existing: unsavedIdeas,
+      count: IDEAS_PER_PAGE - unsavedIdeas.length,
+      fetchBatch: ({ excludedTitles, count }) =>
+        requestIdeaBatch({
+          category,
+          prompt: aiIdeas ? plannerText : '',
+          excludedTitles,
+          count,
+        }),
+    })
+      .then((extra) => {
+        if (extra.length === 0) return;
+        if (aiIdeas) {
+          setAiIdeas((current) => current && [
+            ...current,
+            ...extra.map((idea, i) => ({ ...idea, id: `ai-planner-top-${i}-${Date.now()}`, is_curated: false })),
+          ]);
+        } else {
+          queryClient.setQueryData(
+            ['fresh-project-ideas', category, generationKey],
+            (current = []) => [...current, ...extra],
+          );
+        }
+      })
+      .catch(() => {})
+      .finally(() => setToppingUp(false));
+  });
+
+  const filteredIdeas = unsavedIdeas.filter((idea) => {
     if (!searchTerm) {
       return true;
     }
@@ -230,18 +283,12 @@ console.log("FILTERED IDEAS:", filteredIdeas);
     if (!text.trim()) { setAiIdeas(null); return; }
     setAiGenerating(true);
     try {
-      const params = new URLSearchParams({
-        prompt: text,
-        category,
-        excluded_titles: JSON.stringify(savedTitles),
+      const ideas = await collectUniqueIdeas({
+        excludedTitles: savedTitles,
+        count: IDEAS_PER_PAGE,
+        fetchBatch: ({ excludedTitles, count }) =>
+          requestIdeaBatch({ category, prompt: text, excludedTitles, count }),
       });
-      const response = await fetch(`http://localhost:5000/api/project-ideas?${params}`);
-
-      if (!response.ok) {
-        throw new Error("Idea generation is temporarily unavailable.");
-      }
-
-      const ideas = await response.json();
       setAiIdeas(ideas.map((idea, i) => ({ ...idea, id: `ai-planner-${i}-${Date.now()}`, is_curated: false })));
     } catch (error) {
       toast({ title: "Could not generate ideas", description: error.message, variant: "destructive" });
